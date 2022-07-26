@@ -12,7 +12,7 @@ import numpy as np
 def calculate_indices(
     ds,
     index=None,
-    collection=None,
+    satellite_mission=None,
     custom_varname=None,
     normalise=True,
     drop=False,
@@ -23,7 +23,7 @@ def calculate_indices(
     a set of remote sensing indices, and adds the resulting array as a
     new variable in the original dataset.
 
-    Last modified: July 2021
+    Last modified: July 2022
 
     Parameters
     ----------
@@ -34,7 +34,8 @@ def calculate_indices(
     index : str or list of strs
         A string giving the name of the index to calculate or a list of
         strings giving the names of the indices to calculate:
-
+        
+        * ``'ASI'``  (Artificial Surface Index, Yongquan Zhao & Zhe Zhu 2022)
         * ``'AWEI_ns'`` (Automated Water Extraction Index, no shadows, Feyisa 2014)
         * ``'AWEI_sh'`` (Automated Water Extraction Index, shadows, Feyisa 2014)
         * ``'BAEI'`` (Built-Up Area Extraction Index, Bouzekri et al. 2015)
@@ -47,6 +48,7 @@ def calculate_indices(
         * ``'FMR'`` (Ferrous Minerals Ratio, Segal 1982)
         * ``'IOR'`` (Iron Oxide Ratio, Segal 1982)
         * ``'LAI'`` (Leaf Area Index, Boegh 2002)
+        * ``'MBI'`` (Modified Bare Soil Index, Nguyen et al. 2021)
         * ``'MNDWI'`` (Modified Normalised Difference Water Index, Xu 1996)
         * ``'MSAVI'`` (Modified Soil Adjusted Vegetation Index, Qi et al. 1994)
         * ``'NBI'`` (New Built-Up Index, Jieli et al. 2010)
@@ -64,20 +66,16 @@ def calculate_indices(
         * ``'TCW'`` (Tasseled Cap Wetness, Crist 1985)
         * ``'WI'`` (Water Index, Fisher 2016)
 
-    collection : str
-        An string that tells the function what data collection is
+    satellite_mission : str
+        An string that tells the function which satellite mission's data is
         being used to calculate the index. This is necessary because
-        different collections use different names for bands covering
+        different satellite missions use different names for bands covering
         a similar spectra.
 
         Valid options are:
 
-         * ``'c2'`` (for USGS Landsat Collection 2)
-         * ``'s2'`` (for Sentinel-2)
-
-         As of July 2021, options for ``'c1'`` (USGS Landsat Collection 1)
-         have been removed as Collection 1 data has been archived. The 
-         improved version of Landsat data can be accessed through Collection 2.
+         * ``'ls'`` (for USGS Landsat)
+         * ``'s2'`` (for Copernicus Sentinel-2)
 
     custom_varname : str, optional
         By default, the original dataset will be returned with
@@ -224,6 +222,8 @@ def calculate_indices(
         "IOR": lambda ds: (ds.red / ds.blue),
         # Normalized Difference Turbidity Index, Lacaux, J.P. et al. 2007
         "NDTI": lambda ds: (ds.red - ds.green) / (ds.red + ds.green),
+        # Modified Bare Soil Index, Nguyen et al. 2021
+        "MBI": lambda ds: ((ds.swir_1 - ds.swir_2 - ds.nir) / (ds.swir_1 + ds.swir_2 + ds.nir)) + 0.5,
     }
     
     # Enhanced Normalised Difference Impervious Surfaces Index, Chen et al. 2019
@@ -240,7 +240,47 @@ def calculate_indices(
         return (ds.blue - (a)*(s + m**2))/(ds.blue + (a)*(s + m**2))
     
     index_dict["ENDISI"] = ENDISI
-
+    
+    ## Artificial Surface Index, Yongquan Zhao & Zhe Zhu 2022
+    def af(ds):
+        AF = (ds.nir - ds.blue) / (ds.nir + ds.blue)
+        AF_norm = (AF - AF.min(dim=["y","x"]))/(AF.max(dim=["y","x"]) - AF.min(dim=["y","x"]))
+        return AF_norm
+    def ndvi(ds):
+        return (ds.nir - ds.red) / (ds.nir + ds.red)
+    def msavi(ds):
+        return ((2 * ds.nir + 1 - ((2 * ds.nir + 1) ** 2 - 8 * (ds.nir - ds.red)) ** 0.5) / 2 )
+    def vsf(ds):
+        NDVI = ndvi(ds)
+        MSAVI = msavi(ds)
+        VSF = 1 - NDVI * MSAVI 
+        VSF_norm = (VSF - VSF.min(dim=["y","x"]))/(VSF.max(dim=["y","x"]) - VSF.min(dim=["y","x"]))
+        return VSF_norm
+    def mbi(ds):
+        return ((ds.swir_1 - ds.swir_2 - ds.nir) / (ds.swir_1 + ds.swir_2 + ds.nir)) + 0.5
+    def embi(ds):
+        MBI = mbi(ds)
+        MNDWI = mndwi(ds)
+        return (MBI - MNDWI - 0.5) / (MBI + MNDWI + 1.5)
+    def ssf(ds):
+        EMBI = embi(ds)
+        SSF = 1 - EMBI
+        SSF_norm = (SSF - SSF.min(dim=["y","x"]))/(SSF.max(dim=["y","x"]) - SSF.min(dim=["y","x"]))
+        return  SSF_norm
+    # Overall modulation using the  Modulation Factor (MF).
+    def mf(ds):
+        MF = ((ds.blue + ds.green) - (ds.nir + ds.swir_1)) / ((ds.blue + ds.green) + (ds.nir + ds.swir_1))
+        MF_norm = (MF - MF.min(dim=["y","x"]))/(MF.max(dim=["y","x"]) - MF.min(dim=["y","x"]))
+        return MF_norm
+    def ASI(ds):
+        AF = af(ds)
+        VSF = vsf(ds)
+        SSF = ssf(ds)
+        MF = mf(ds)
+        return AF * VSF * SSF * MF
+    
+    index_dict["ASI"] = ASI
+    
     # If index supplied is not a list, convert to list. This allows us to
     # iterate through either multiple or single indices in the loop below
     indices = index if isinstance(index, list) else [index]
@@ -294,23 +334,23 @@ def calculate_indices(
                 "list of valid options for `index`"
             )
 
-        # Rename bands to a consistent format if depending on what collection
-        # is specified in `collection`. This allows the same index calculations
-        # to be applied to all collections. If no collection was provided,
+        # Rename bands to a consistent format if depending on what satellite mission
+        # is specified in `satellite_mission`. This allows the same index calculations
+        # to be applied to all satellite missions. If no satellite mission was provided,
         # raise an exception.
-        if collection is None:
+        if satellite_mission is None:
 
             raise ValueError(
-                "No `collection` was provided. Please specify "
-                "either 'c2' or 's2' to ensure the \nfunction "
+                "No `satellite_mission` was provided. Please specify "
+                "either 'ls' or 's2' to ensure the \nfunction "
                 "calculates indices using the correct spectral "
                 "bands"
             )
             
-        elif collection == "c2":
+        elif satellite_mission == "ls":
             sr_max = 1.0
             # Dictionary mapping full data names to simpler alias names
-            # This only applies to properly-scaled C2 data i.e. from
+            # This only applies to properly-scaled "ls" data i.e. from
             # the Landsat geomedians. calculate_indices will not show 
             # correct output for raw (unscaled) Landsat data (i.e. default
             # outputs from dc.load)
@@ -328,7 +368,7 @@ def calculate_indices(
                 a: b for a, b in bandnames_dict.items() if a in ds.variables
             }
 
-        elif collection == "s2":
+        elif satellite_mission == "s2":
             sr_max = 10000
             # Dictionary mapping full data names to simpler alias names
             bandnames_dict = {
@@ -349,12 +389,12 @@ def calculate_indices(
                 a: b for a, b in bandnames_dict.items() if a in ds.variables
             }
 
-        # Raise error if no valid collection name is provided:
+        # Raise error if no valid satellite_mission name is provided:
         else:
             raise ValueError(
-                f"'{collection}' is not a valid option for "
-                "`collection`. Please specify either \n"
-                "'c2' or 's2'"
+                f"'{satellite_mission}' is not a valid option for "
+                "`satellite_mission`. Please specify either \n"
+                "'ls' or 's2'"
             )
 
         # Apply index function
