@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "ghana_boundary_box",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { }, "geometry": { "type": "Polygon", "coordinates": [ [ [ -0.402805400429543, 5.492644416213626 ], [ 0.451219562080903, 5.818834506061365 ], [ 0.526136479206511, 5.622688395768864 ], [ -0.327888483303934, 5.296498305921125 ], [ -0.402805400429543, 5.492644416213626 ] ] ] } }
+]
+}
